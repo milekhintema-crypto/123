@@ -53,10 +53,41 @@ def macos_accessibility_trusted() -> bool:
         return True
 
 
-def _paste_mac() -> None:
-    """macOS: Cmd+V через нативный Quartz CGEvent (надёжнее pynput).
+def _paste_mac_applescript() -> bool:
+    """macOS: Cmd+V через AppleScript / System Events — самый надёжный способ.
 
-    Требует права «Универсальный доступ» (Accessibility).
+    При первом вызове macOS покажет запрос «Терминал хочет управлять
+    System Events» (раздел «Автоматизация») — нужно разрешить.
+    """
+    try:
+        result = subprocess.run(
+            [
+                "osascript",
+                "-e",
+                'tell application "System Events" to keystroke "v" using command down',
+            ],
+            capture_output=True,
+            timeout=5,
+        )
+        if result.returncode == 0:
+            return True
+        log.warning(
+            "osascript paste failed (rc=%s): %s",
+            result.returncode,
+            result.stderr.decode("utf-8", "replace").strip(),
+        )
+        return False
+    except Exception:
+        log.exception("osascript paste failed")
+        return False
+
+
+def _paste_mac_quartz() -> None:
+    """macOS fallback: Cmd+V через Quartz CGEvent.
+
+    Полная последовательность (Cmd down → V down → V up → Cmd up)
+    с микропаузами — «краткая» форма (только флаги) на новых macOS
+    иногда молча игнорируется системой.
     """
     from Quartz import (
         CGEventCreateKeyboardEvent,
@@ -66,13 +97,29 @@ def _paste_mac() -> None:
         kCGHIDEventTap,
     )
 
-    V_KEYCODE = 9  # виртуальный код клавиши «V» на macOS
-    down = CGEventCreateKeyboardEvent(None, V_KEYCODE, True)
-    CGEventSetFlags(down, kCGEventFlagMaskCommand)
-    up = CGEventCreateKeyboardEvent(None, V_KEYCODE, False)
-    CGEventSetFlags(up, kCGEventFlagMaskCommand)
-    CGEventPost(kCGHIDEventTap, down)
-    CGEventPost(kCGHIDEventTap, up)
+    V_KEYCODE = 9  # физическая клавиша «V»
+    CMD_KEYCODE = 55  # левый Cmd
+
+    cmd_down = CGEventCreateKeyboardEvent(None, CMD_KEYCODE, True)
+    CGEventSetFlags(cmd_down, kCGEventFlagMaskCommand)
+    v_down = CGEventCreateKeyboardEvent(None, V_KEYCODE, True)
+    CGEventSetFlags(v_down, kCGEventFlagMaskCommand)
+    v_up = CGEventCreateKeyboardEvent(None, V_KEYCODE, False)
+    CGEventSetFlags(v_up, kCGEventFlagMaskCommand)
+    cmd_up = CGEventCreateKeyboardEvent(None, CMD_KEYCODE, False)
+    CGEventSetFlags(cmd_up, 0)
+
+    for event in (cmd_down, v_down, v_up, cmd_up):
+        CGEventPost(kCGHIDEventTap, event)
+        time.sleep(0.01)
+
+
+def _paste_mac() -> None:
+    """macOS: сначала AppleScript, при неудаче — Quartz CGEvent."""
+    if _paste_mac_applescript():
+        return
+    log.info("Falling back to Quartz CGEvent paste")
+    _paste_mac_quartz()
 
 
 def _paste_keystroke() -> None:
@@ -157,15 +204,17 @@ class TextInjector:
             log.exception("Paste keystroke failed")
             return False
 
-        # 4. Восстанавливаем буфер асинхронно, дав приложению время
-        #    прочитать наш текст из clipboard. Задержку берём с запасом,
-        #    чтобы медленные приложения успели прочитать буфер.
+        # 4. Восстанавливаем буфер асинхронно и НЕ раньше чем через 10 с:
+        #    если автовставка не сработала, у пользователя должно быть
+        #    время вставить текст вручную (Cmd/Ctrl+V), прежде чем мы
+        #    вернём старое содержимое буфера.
         if self._restore and old_clipboard is not None:
 
             def _restore_later(value: str) -> None:
-                time.sleep(2.0)
+                time.sleep(10.0)
                 try:
                     pyperclip.copy(value)
+                    log.debug("Clipboard restored to previous content")
                 except Exception:
                     pass
 
