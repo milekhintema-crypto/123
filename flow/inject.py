@@ -37,8 +37,46 @@ def _is_wayland() -> bool:
     )
 
 
+def macos_accessibility_trusted() -> bool:
+    """True, если приложению выдано право «Универсальный доступ» (macOS).
+
+    Без него эмуляция Cmd+V (любым способом) молча не срабатывает.
+    """
+    if sys.platform != "darwin":
+        return True
+    try:
+        from ApplicationServices import AXIsProcessTrusted
+
+        return bool(AXIsProcessTrusted())
+    except Exception:
+        # Не смогли проверить — не блокируем, просто вернём True
+        return True
+
+
+def _paste_mac() -> None:
+    """macOS: Cmd+V через нативный Quartz CGEvent (надёжнее pynput).
+
+    Требует права «Универсальный доступ» (Accessibility).
+    """
+    from Quartz import (
+        CGEventCreateKeyboardEvent,
+        CGEventPost,
+        CGEventSetFlags,
+        kCGEventFlagMaskCommand,
+        kCGHIDEventTap,
+    )
+
+    V_KEYCODE = 9  # виртуальный код клавиши «V» на macOS
+    down = CGEventCreateKeyboardEvent(None, V_KEYCODE, True)
+    CGEventSetFlags(down, kCGEventFlagMaskCommand)
+    up = CGEventCreateKeyboardEvent(None, V_KEYCODE, False)
+    CGEventSetFlags(up, kCGEventFlagMaskCommand)
+    CGEventPost(kCGHIDEventTap, down)
+    CGEventPost(kCGHIDEventTap, up)
+
+
 def _paste_keystroke() -> None:
-    """Эмуляция сочетания «вставить» через pynput."""
+    """Эмуляция сочетания «вставить» через pynput (Windows и fallback)."""
     modifier = Key.cmd if sys.platform == "darwin" else Key.ctrl
     with _keyboard.pressed(modifier):
         _keyboard.press("v")
@@ -99,7 +137,18 @@ class TextInjector:
 
         # 3. Эмулируем paste
         try:
-            if sys.platform.startswith("linux"):
+            if sys.platform == "darwin":
+                if not macos_accessibility_trusted():
+                    # Право не выдано — Cmd+V не сработает. Текст оставляем
+                    # в буфере (без восстановления), чтобы можно было
+                    # вставить вручную, и явно сообщаем об ошибке.
+                    log.error(
+                        "macOS Accessibility (Универсальный доступ) не выдан — "
+                        "автовставка невозможна. Текст оставлен в буфере обмена."
+                    )
+                    return False
+                _paste_mac()
+            elif sys.platform.startswith("linux"):
                 if not _paste_linux():
                     _paste_keystroke()  # fallback (работает на X11)
             else:
@@ -109,11 +158,12 @@ class TextInjector:
             return False
 
         # 4. Восстанавливаем буфер асинхронно, дав приложению время
-        #    прочитать наш текст из clipboard.
+        #    прочитать наш текст из clipboard. Задержку берём с запасом,
+        #    чтобы медленные приложения успели прочитать буфер.
         if self._restore and old_clipboard is not None:
 
             def _restore_later(value: str) -> None:
-                time.sleep(1.0)
+                time.sleep(2.0)
                 try:
                     pyperclip.copy(value)
                 except Exception:

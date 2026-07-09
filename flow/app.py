@@ -93,6 +93,26 @@ class FlowController(QObject):
         self._tray.show()
         self._hotkey.start()
         self._tray.set_state("idle", "Готов к диктовке")
+
+        # Проверяем право «Универсальный доступ» — без него автовставка не
+        # работает (текст лишь копируется в буфер).
+        from .inject import macos_accessibility_trusted
+
+        if not macos_accessibility_trusted():
+            log.warning("macOS Accessibility (Универсальный доступ) НЕ выдан")
+            QMessageBox.warning(
+                None,
+                "Flow Dictate — нужно разрешение",
+                "Не выдан «Универсальный доступ» (Accessibility).\n\n"
+                "Без него распознанный текст НЕ будет вставляться "
+                "автоматически (только копироваться в буфер).\n\n"
+                "Откройте: Системные настройки → Конфиденциальность и "
+                "безопасность → Универсальный доступ → включите «Терминал», "
+                "затем ПЕРЕЗАПУСТИТЕ программу.",
+            )
+        else:
+            log.info("macOS Accessibility: OK")
+
         if not Config.get_api_key():
             # Первый запуск: сразу открываем настройки для ввода ключа
             self._first_run_notice()
