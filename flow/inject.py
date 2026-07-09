@@ -53,21 +53,34 @@ def macos_accessibility_trusted() -> bool:
         return True
 
 
-def _paste_mac_applescript() -> bool:
+def _paste_mac_applescript(target_pid: int | None = None) -> bool:
     """macOS: Cmd+V через AppleScript / System Events — самый надёжный способ.
+
+    Если задан target_pid, сначала выводим этот процесс на передний план
+    (set frontmost) и только потом шлём Cmd+V — так вставка гарантированно
+    попадает в целевое окно, даже если фокус ушёл в наше приложение.
 
     При первом вызове macOS покажет запрос «Терминал хочет управлять
     System Events» (раздел «Автоматизация») — нужно разрешить.
     """
+    if target_pid is not None:
+        script = (
+            'tell application "System Events"\n'
+            f"    set targetProc to first process whose unix id is {target_pid}\n"
+            "    set frontmost of targetProc to true\n"
+            "end tell\n"
+            "delay 0.15\n"
+            'tell application "System Events" to keystroke "v" using command down'
+        )
+    else:
+        script = (
+            'tell application "System Events" to keystroke "v" using command down'
+        )
     try:
         result = subprocess.run(
-            [
-                "osascript",
-                "-e",
-                'tell application "System Events" to keystroke "v" using command down',
-            ],
+            ["osascript", "-e", script],
             capture_output=True,
-            timeout=5,
+            timeout=6,
         )
         if result.returncode == 0:
             return True
@@ -162,11 +175,10 @@ def activate_app_mac(pid: int) -> bool:
         return False
 
 
-def _paste_mac() -> None:
-    """macOS: сначала AppleScript, при неудаче — Quartz CGEvent."""
-    log.info("Paste target (frontmost app): %s", _frontmost_app_mac())
-    if _paste_mac_applescript():
-        log.info("Paste sent via AppleScript/System Events")
+def _paste_mac(target_pid: int | None = None) -> None:
+    """macOS: сначала AppleScript (с активацией цели), при неудаче — Quartz."""
+    if _paste_mac_applescript(target_pid):
+        log.info("Paste sent via AppleScript/System Events (target pid=%s)", target_pid)
         return
     log.info("Falling back to Quartz CGEvent paste")
     _paste_mac_quartz()
@@ -238,18 +250,6 @@ class TextInjector:
         # Даём clipboard-менеджеру время принять данные
         time.sleep(self._paste_delay)
 
-        # 2.5 (macOS) Возвращаем фокус целевому приложению, если он ушёл
-        if sys.platform == "darwin" and target_pid is not None:
-            current = frontmost_app_mac()
-            if current is None or current[0] != target_pid:
-                log.info(
-                    "Refocusing target app (pid=%s) before paste, frontmost was %s",
-                    target_pid,
-                    current[1] if current else "?",
-                )
-                if activate_app_mac(target_pid):
-                    time.sleep(0.3)  # даём системе завершить смену фокуса
-
         # 3. Эмулируем paste
         try:
             if sys.platform == "darwin":
@@ -262,7 +262,9 @@ class TextInjector:
                         "автовставка невозможна. Текст оставлен в буфере обмена."
                     )
                     return False
-                _paste_mac()
+                # target_pid: скрипт сам выведет целевое окно на передний
+                # план перед вставкой
+                _paste_mac(target_pid)
             elif sys.platform.startswith("linux"):
                 if not _paste_linux():
                     _paste_keystroke()  # fallback (работает на X11)
