@@ -84,16 +84,24 @@ class PostProcessor:
             "Authorization": f"Api-Key {self._api_key}",
             "x-folder-id": self._folder_id,
         }
+        log.info("YandexGPT request: model=%s, %d chars", self.model_uri, len(transcript))
         try:
             resp = requests.post(
                 self._endpoint, json=payload, headers=headers, timeout=self._timeout
             )
-            resp.raise_for_status()
+            if resp.status_code != 200:
+                # Показываем тело ответа — там причина (роль, folder, модель)
+                log.error(
+                    "YandexGPT HTTP %s: %s", resp.status_code, resp.text[:500]
+                )
+                return transcript
             data = resp.json()
-            text = (
-                data["result"]["alternatives"][0]["message"]["text"].strip()
-            )
+            text = data["result"]["alternatives"][0]["message"]["text"].strip()
+            log.info("YandexGPT cleaned text: %r", text)
             return text or transcript
+        except requests.Timeout:
+            log.error("YandexGPT timeout after %ss — using raw transcript", self._timeout)
+            return transcript
         except Exception:
             log.exception("YandexGPT post-processing failed — using raw transcript")
             return transcript
