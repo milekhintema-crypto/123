@@ -1,0 +1,39 @@
+# Пример конфигурации Flow Dictate.
+# Реальный файл создаётся автоматически:
+#   macOS:   ~/Library/Application Support/flow-dictate/config.yaml
+#   Linux:   ~/.config/flow-dictate/config.yaml
+#   Windows: %APPDATA%\flow-dictate\config.yaml
+#
+# ВАЖНО: API-ключ Yandex Cloud здесь НЕ хранится — он лежит в системном
+# хранилище секретов (keyring). Задать его можно в окне настроек приложения.
+
+# --- Хоткей ---
+# alt_r = right Option (macOS) / right Alt (Windows, Linux)
+hotkey: alt_r
+# Нажатия короче этого порога игнорируются (защита от случайных тапов и AltGr)
+min_hold_seconds: 0.25
+
+# --- Распознавание (Yandex SpeechKit v3, streaming) ---
+language: ru-RU
+stt_endpoint: stt.api.cloud.yandex.net:443
+sample_rate: 16000
+# Термины/имена/аббревиатуры — подсказки для ASR и YandexGPT
+glossary:
+  - Wispr Flow
+  - SpeechKit
+
+# --- Пост-обработка (YandexGPT) ---
+postprocess_enabled: true
+folder_id: ""            # ваш folder_id из консоли Yandex Cloud (b1g...)
+gpt_model: yandexgpt-lite # yandexgpt-lite (быстрее/дешевле) или yandexgpt
+gpt_endpoint: https://llm.api.cloud.yandex.net/foundationModels/v1/completion
+gpt_temperature: 0.1
+gpt_timeout_seconds: 15.0
+
+# --- Аудио ---
+input_device: null        # null = системный микрофон по умолчанию
+vad_aggressiveness: 2     # 0..3, только для индикации речи в overlay
+
+# --- Вставка текста ---
+paste_delay_seconds: 0.08
+restore_clipboard: true
