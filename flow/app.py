@@ -250,10 +250,15 @@ class FlowController(QObject):
     def _open_settings(self) -> None:
         if self._settings_dialog is not None:
             self._settings_dialog.raise_()
+            self._settings_dialog.activateWindow()
             return
         self._settings_dialog = SettingsDialog(self._config, self._apply_settings)
         self._settings_dialog.finished.connect(self._settings_closed)
         self._settings_dialog.show()
+        # В режиме «агента» (macOS accessory) окна сами не выходят на
+        # передний план — активируем явно.
+        self._settings_dialog.raise_()
+        self._settings_dialog.activateWindow()
 
     def _settings_closed(self, *_: object) -> None:
         self._settings_dialog = None

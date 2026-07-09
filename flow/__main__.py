@@ -22,6 +22,25 @@ def main() -> int:
     # Приложение живёт в трее: закрытие окна настроек не должно завершать его
     app.setQuitOnLastWindowClosed(False)
 
+    if sys.platform == "darwin":
+        # КРИТИЧНО для macOS: переводим приложение в режим «агента»
+        # (accessory). Иначе показ overlay активирует наше приложение,
+        # фокус уходит из целевого окна (курсор перестаёт мигать),
+        # и Cmd+V вставляет текст не туда. Заодно убирает иконку из Dock.
+        try:
+            from AppKit import (
+                NSApplication,
+                NSApplicationActivationPolicyAccessory,
+            )
+
+            NSApplication.sharedApplication().setActivationPolicy_(
+                NSApplicationActivationPolicyAccessory
+            )
+        except Exception:
+            logging.getLogger(__name__).exception(
+                "Failed to set accessory activation policy"
+            )
+
     if not QSystemTrayIcon.isSystemTrayAvailable():
         QMessageBox.critical(
             None,
