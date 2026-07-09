@@ -265,10 +265,48 @@ def _ensure_target_frontmost(target_pid: int, timeout: float = 1.2) -> bool:
     return False
 
 
+def insert_text_ax_mac(text: str) -> bool:
+    """macOS: вставить текст НАПРЯМУЮ в сфокусированный элемент через
+    Accessibility API (AXUIElement) — без эмуляции клавиш и без Cmd+V.
+
+    Находим системно-сфокусированный UI-элемент (поле с кареткой) и
+    записываем текст в AXSelectedText — это вставка в позицию курсора
+    (замена выделения, если оно есть). Нечему «проглатываться»: никакие
+    синтетические клавиши не участвуют. Требует только права
+    «Универсальный доступ».
+    """
+    try:
+        from ApplicationServices import (
+            AXUIElementCopyAttributeValue,
+            AXUIElementCreateSystemWide,
+            AXUIElementSetAttributeValue,
+        )
+
+        system = AXUIElementCreateSystemWide()
+        err, focused = AXUIElementCopyAttributeValue(
+            system, "AXFocusedUIElement", None
+        )
+        if err != 0 or focused is None:
+            log.warning("AX: не удалось получить сфокусированный элемент (err=%s)", err)
+            return False
+
+        err = AXUIElementSetAttributeValue(focused, "AXSelectedText", text)
+        if err != 0:
+            # Элемент не поддерживает запись AXSelectedText (бывает в
+            # нестандартных тулкитах) — уходим на keystroke-фоллбэк.
+            log.warning("AX: запись AXSelectedText не удалась (err=%s)", err)
+            return False
+        return True
+    except Exception:
+        log.exception("AX insertion failed")
+        return False
+
+
 def _paste_mac(target_pid: int | None = None) -> None:
-    """macOS: вернуть фокус цели (с подтверждением), затем Cmd+V.
+    """macOS: вернуть фокус цели, затем вставить текст.
 
     Порядок: refocus-and-wait → AppleScript keystroke → Quartz CGEvent.
+    (Прямая AX-вставка выполняется раньше, в TextInjector.inject.)
     """
     if secure_input_enabled_mac():
         # Событие всё равно отправим (вдруг блокировка снята частично),
@@ -278,13 +316,6 @@ def _paste_mac(target_pid: int | None = None) -> None:
             "блокирует синтетический Cmd+V. Откройте меню «Терминал» → "
             "снимите галочку «Безопасный ввод с клавиатуры» (или закройте "
             "приложение, включившее Secure Input) и повторите."
-        )
-    if target_pid is not None:
-        ok = _ensure_target_frontmost(target_pid)
-        log.info(
-            "Focus on target before paste: %s (frontmost=%s)",
-            ok,
-            _frontmost_app_mac(),
         )
 
     if _paste_mac_applescript(None):
@@ -360,7 +391,7 @@ class TextInjector:
         # Даём clipboard-менеджеру время принять данные
         time.sleep(self._paste_delay)
 
-        # 3. Эмулируем paste
+        # 3. Вставляем
         try:
             if sys.platform == "darwin":
                 if not macos_accessibility_trusted():
@@ -372,8 +403,23 @@ class TextInjector:
                         "автовставка невозможна. Текст оставлен в буфере обмена."
                     )
                     return False
-                # target_pid: скрипт сам выведет целевое окно на передний
-                # план перед вставкой
+
+                # Возвращаем фокус целевому приложению (если ушёл)
+                if target_pid is not None:
+                    focused = _ensure_target_frontmost(target_pid)
+                    log.info(
+                        "Focus on target before insert: %s (frontmost=%s)",
+                        focused,
+                        _frontmost_app_mac(),
+                    )
+
+                # Основной путь: прямая вставка через Accessibility API —
+                # без синтетических клавиш, нечему блокироваться.
+                if insert_text_ax_mac(text):
+                    log.info("Text inserted via Accessibility API (AXSelectedText)")
+                    return True
+
+                # Фоллбэк: старый путь с эмуляцией Cmd+V
                 _paste_mac(target_pid)
             elif sys.platform.startswith("linux"):
                 if not _paste_linux():
