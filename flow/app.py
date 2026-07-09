@@ -175,7 +175,9 @@ class FlowController(QObject):
     # Финал → пост-обработка → вставка
     # ------------------------------------------------------------------
     def _handle_final(self, text: str) -> None:
+        log.info("Final transcript received (%d chars): %r", len(text), text)
         if not text:
+            log.warning("Empty final transcript — nothing to inject")
             self._overlay.hide_overlay()
             self._tray.set_state("idle", "Готов к диктовке")
             return
@@ -202,7 +204,9 @@ class FlowController(QObject):
             self._inject_text(text)
 
     def _inject_text(self, text: str) -> None:
+        log.info("Injecting text (%d chars): %r", len(text), text)
         ok = self._injector.inject(text)
+        log.info("Injection result: %s (текст также помещён в буфер обмена)", ok)
         if ok:
             self._overlay.flash_done()
             self._tray.set_state("idle", "Готов к диктовке")

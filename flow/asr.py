@@ -141,21 +141,28 @@ class SpeechKitStreamer:
             responses = stub.RecognizeStreaming(
                 self._requests(audio_queue), metadata=metadata
             )
+            # Последний показанный пользователю текст — запасной вариант
+            # финала на случай, если сервер не успел прислать final-событие
+            # (короткая диктовка + быстрое отпускание клавиши).
+            last_live = ""
             for response in responses:
                 if self._cancelled:
                     responses.cancel()
                     return
                 event = response.WhichOneof("Event")
+                log.debug("ASR event: %s", event)
                 if event == "partial" and response.partial.alternatives:
                     # Промежуточная гипотеза текущей фразы: уже готовые
                     # финалы + живой партиал
                     partial_text = response.partial.alternatives[0].text
                     live = " ".join(finals + [partial_text]).strip()
                     if live:
+                        last_live = live
                         self._on_partial(live)
                 elif event == "final" and response.final.alternatives:
                     finals.append(response.final.alternatives[0].text)
-                    self._on_partial(" ".join(finals).strip())
+                    last_live = " ".join(finals).strip()
+                    self._on_partial(last_live)
                 elif event == "final_refinement":
                     # Нормализованный (с пунктуацией) вариант финала —
                     # заменяем последний «сырой» финал
@@ -166,7 +173,8 @@ class SpeechKitStreamer:
                             finals[-1] = refined
                         else:
                             finals.append(refined)
-                        self._on_partial(" ".join(finals).strip())
+                        last_live = " ".join(finals).strip()
+                        self._on_partial(last_live)
                 # eou_update / status_code — служебные, пропускаем
         except grpc.RpcError as exc:
             if not self._cancelled:
@@ -184,4 +192,7 @@ class SpeechKitStreamer:
                 self._channel = None
 
         if not self._cancelled:
-            self._on_final(" ".join(finals).strip())
+            # Приоритет у собранных финалов; если их нет — последний партиал
+            final_text = " ".join(finals).strip() or last_live
+            log.info("ASR final text: %r", final_text)
+            self._on_final(final_text)
