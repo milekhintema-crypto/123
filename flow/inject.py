@@ -211,21 +211,54 @@ def _paste_mac_to_pid(pid: int) -> bool:
     return True
 
 
-def _paste_mac(target_pid: int | None = None) -> None:
-    """macOS: приоритет — прямая доставка события в процесс по pid.
+def _ensure_target_frontmost(target_pid: int, timeout: float = 1.2) -> bool:
+    """Вернуть фокус целевому приложению и ДОЖДАТЬСЯ реального перехода.
 
-    Порядок: CGEventPostToPid (по pid) → AppleScript → Quartz на фокус.
+    Прошлая версия спала фиксированные 0.3 c и не проверяла результат —
+    для части приложений (Telegram) этого не хватало. Теперь:
+    1) деактивируем себя (NSApp.deactivate — отдаёт фокус предыдущему),
+    2) активируем цель по pid,
+    3) опрашиваем frontmost, пока фокус фактически не перейдёт.
+    """
+    front = frontmost_app_mac()
+    if front is not None and front[0] == target_pid:
+        return True
+
+    try:
+        from AppKit import NSApplication
+
+        NSApplication.sharedApplication().deactivate()
+    except Exception:
+        pass
+
+    activate_app_mac(target_pid)
+
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        time.sleep(0.05)
+        front = frontmost_app_mac()
+        if front is not None and front[0] == target_pid:
+            return True
+        # Повторяем активацию: первая попытка иногда «не берёт»
+        activate_app_mac(target_pid)
+    return False
+
+
+def _paste_mac(target_pid: int | None = None) -> None:
+    """macOS: вернуть фокус цели (с подтверждением), затем Cmd+V.
+
+    Порядок: refocus-and-wait → AppleScript keystroke → Quartz CGEvent.
     """
     if target_pid is not None:
-        try:
-            if _paste_mac_to_pid(target_pid):
-                log.info("Paste sent via CGEventPostToPid (pid=%s)", target_pid)
-                return
-        except Exception:
-            log.exception("CGEventPostToPid failed — trying AppleScript")
+        ok = _ensure_target_frontmost(target_pid)
+        log.info(
+            "Focus on target before paste: %s (frontmost=%s)",
+            ok,
+            _frontmost_app_mac(),
+        )
 
-    if _paste_mac_applescript(target_pid):
-        log.info("Paste sent via AppleScript/System Events (target pid=%s)", target_pid)
+    if _paste_mac_applescript(None):
+        log.info("Paste sent via AppleScript/System Events")
         return
     log.info("Falling back to Quartz CGEvent paste")
     _paste_mac_quartz()

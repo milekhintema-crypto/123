@@ -7,9 +7,14 @@
 
 from __future__ import annotations
 
+import logging
+import sys
+
 from PySide6.QtCore import Qt, QTimer, QPropertyAnimation, Property
 from PySide6.QtGui import QColor, QCursor, QGuiApplication, QPainter
 from PySide6.QtWidgets import QHBoxLayout, QLabel, QWidget
+
+log = logging.getLogger(__name__)
 
 
 class _PulsingDot(QWidget):
@@ -96,6 +101,45 @@ class Overlay(QWidget):
         self._hide_timer.setSingleShot(True)
         self._hide_timer.timeout.connect(self.hide_overlay)
 
+        # macOS: патч нативного окна выполняется один раз при первом показе
+        self._mac_panel_patched = False
+
+    # ------------------------------------------------------------------
+    def _apply_macos_nonactivating(self) -> None:
+        """macOS: сделать окно неактивирующейся панелью.
+
+        Qt создаёт для Qt.Tool-окон NSPanel; добавляем ему стиль
+        NonactivatingPanel — тогда показ overlay НЕ активирует наше
+        приложение и фокус (мигающий курсор) остаётся в целевом окне.
+        Именно так работают Spotlight-подобные утилиты.
+        """
+        if self._mac_panel_patched or sys.platform != "darwin":
+            return
+        self._mac_panel_patched = True
+        try:
+            from ctypes import c_void_p
+
+            import objc
+            from AppKit import NSPanel
+
+            NS_NONACTIVATING_PANEL_MASK = 1 << 7  # NSWindowStyleMaskNonactivatingPanel
+
+            nsview = objc.objc_object(c_void_p=int(self.winId()))
+            nswindow = nsview.window()
+            if nswindow is not None and nswindow.isKindOfClass_(NSPanel):
+                nswindow.setStyleMask_(
+                    int(nswindow.styleMask()) | NS_NONACTIVATING_PANEL_MASK
+                )
+                nswindow.setBecomesKeyOnlyIfNeeded_(True)
+                log.info("Overlay patched to non-activating NSPanel")
+            else:
+                log.warning(
+                    "Overlay native window is not NSPanel (%s) — cannot patch",
+                    type(nswindow).__name__ if nswindow is not None else None,
+                )
+        except Exception:
+            log.exception("Failed to patch overlay into non-activating panel")
+
     # ------------------------------------------------------------------
     def paintEvent(self, event) -> None:  # noqa: N802
         """Полупрозрачная тёмная подложка со скруглёнными углами."""
@@ -114,7 +158,9 @@ class Overlay(QWidget):
         self._label.setText("Слушаю…")
         self._reposition()
         self.show()
-        self.raise_()
+        # Патчим нативное окно после первого show(), когда оно уже создано;
+        # raise_() не вызываем — на macOS он может активировать приложение.
+        self._apply_macos_nonactivating()
 
     def set_partial_text(self, text: str) -> None:
         """Живой текст из ASR (обрезаем начало, если слишком длинно)."""

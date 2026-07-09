@@ -233,11 +233,13 @@ class FlowController(QObject):
 
     def _inject_text(self, text: str) -> None:
         log.info("Injecting text (%d chars): %r", len(text), text)
+        # Прячем overlay ДО вставки: окно не должно влиять на фокус
+        # в момент Cmd+V
+        self._overlay.hide_overlay()
         target_pid = self._target_app[0] if self._target_app else None
         ok = self._injector.inject(text, target_pid=target_pid)
         log.info("Injection result: %s (текст также помещён в буфер обмена)", ok)
         if ok:
-            self._overlay.flash_done()
             self._tray.set_state("idle", "Готов к диктовке")
         else:
             self._overlay.show_error("Не удалось вставить текст")
