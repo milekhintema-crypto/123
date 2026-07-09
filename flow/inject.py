@@ -175,8 +175,55 @@ def activate_app_mac(pid: int) -> bool:
         return False
 
 
+def _paste_mac_to_pid(pid: int) -> bool:
+    """macOS: Cmd+V напрямую в процесс по pid через CGEventPostToPid.
+
+    Событие доставляется конкретному приложению независимо от того, какое
+    окно сейчас в фокусе — не нужно возвращать фокус и бороться с его
+    кражей overlay'ем. Требует права «Универсальный доступ».
+    """
+    try:
+        from Quartz import (
+            CGEventCreateKeyboardEvent,
+            CGEventPostToPid,
+            CGEventSetFlags,
+            kCGEventFlagMaskCommand,
+        )
+    except Exception:
+        log.exception("Quartz import failed")
+        return False
+
+    V_KEYCODE = 9
+    CMD_KEYCODE = 55
+
+    cmd_down = CGEventCreateKeyboardEvent(None, CMD_KEYCODE, True)
+    CGEventSetFlags(cmd_down, kCGEventFlagMaskCommand)
+    v_down = CGEventCreateKeyboardEvent(None, V_KEYCODE, True)
+    CGEventSetFlags(v_down, kCGEventFlagMaskCommand)
+    v_up = CGEventCreateKeyboardEvent(None, V_KEYCODE, False)
+    CGEventSetFlags(v_up, kCGEventFlagMaskCommand)
+    cmd_up = CGEventCreateKeyboardEvent(None, CMD_KEYCODE, False)
+    CGEventSetFlags(cmd_up, 0)
+
+    for event in (cmd_down, v_down, v_up, cmd_up):
+        CGEventPostToPid(pid, event)
+        time.sleep(0.01)
+    return True
+
+
 def _paste_mac(target_pid: int | None = None) -> None:
-    """macOS: сначала AppleScript (с активацией цели), при неудаче — Quartz."""
+    """macOS: приоритет — прямая доставка события в процесс по pid.
+
+    Порядок: CGEventPostToPid (по pid) → AppleScript → Quartz на фокус.
+    """
+    if target_pid is not None:
+        try:
+            if _paste_mac_to_pid(target_pid):
+                log.info("Paste sent via CGEventPostToPid (pid=%s)", target_pid)
+                return
+        except Exception:
+            log.exception("CGEventPostToPid failed — trying AppleScript")
+
     if _paste_mac_applescript(target_pid):
         log.info("Paste sent via AppleScript/System Events (target pid=%s)", target_pid)
         return
