@@ -125,6 +125,43 @@ def _frontmost_app_mac() -> str:
         return "?"
 
 
+def frontmost_app_mac() -> tuple[int, str] | None:
+    """(pid, имя) приложения в фокусе — целевое окно для вставки.
+
+    Вызывается в момент НАЖАТИЯ хоткея, пока фокус ещё в целевом
+    приложении (до показа overlay).
+    """
+    if sys.platform != "darwin":
+        return None
+    try:
+        from AppKit import NSWorkspace
+
+        app = NSWorkspace.sharedWorkspace().frontmostApplication()
+        if app is None:
+            return None
+        return int(app.processIdentifier()), str(app.localizedName())
+    except Exception:
+        log.exception("frontmost_app_mac failed")
+        return None
+
+
+def activate_app_mac(pid: int) -> bool:
+    """Вернуть фокус приложению по pid перед вставкой."""
+    try:
+        from AppKit import (
+            NSApplicationActivateIgnoringOtherApps,
+            NSRunningApplication,
+        )
+
+        app = NSRunningApplication.runningApplicationWithProcessIdentifier_(pid)
+        if app is None:
+            return False
+        return bool(app.activateWithOptions_(NSApplicationActivateIgnoringOtherApps))
+    except Exception:
+        log.exception("activate_app_mac failed")
+        return False
+
+
 def _paste_mac() -> None:
     """macOS: сначала AppleScript, при неудаче — Quartz CGEvent."""
     log.info("Paste target (frontmost app): %s", _frontmost_app_mac())
@@ -173,8 +210,13 @@ class TextInjector:
         self._paste_delay = paste_delay
         self._restore = restore_clipboard
 
-    def inject(self, text: str) -> bool:
-        """Вставить текст. Возвращает True при успехе."""
+    def inject(self, text: str, target_pid: int | None = None) -> bool:
+        """Вставить текст. Возвращает True при успехе.
+
+        target_pid (macOS) — pid приложения, в котором был фокус в момент
+        нажатия хоткея. Перед вставкой возвращаем ему фокус: даже если
+        overlay/наше приложение украли фокус, Cmd+V попадёт куда нужно.
+        """
         if not text:
             return False
 
@@ -195,6 +237,18 @@ class TextInjector:
 
         # Даём clipboard-менеджеру время принять данные
         time.sleep(self._paste_delay)
+
+        # 2.5 (macOS) Возвращаем фокус целевому приложению, если он ушёл
+        if sys.platform == "darwin" and target_pid is not None:
+            current = frontmost_app_mac()
+            if current is None or current[0] != target_pid:
+                log.info(
+                    "Refocusing target app (pid=%s) before paste, frontmost was %s",
+                    target_pid,
+                    current[1] if current else "?",
+                )
+                if activate_app_mac(target_pid):
+                    time.sleep(0.3)  # даём системе завершить смену фокуса
 
         # 3. Эмулируем paste
         try:

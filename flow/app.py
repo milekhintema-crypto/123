@@ -29,7 +29,7 @@ from .asr import SpeechKitStreamer
 from .audio import AudioCapture
 from .config import Config
 from .hotkey import HotkeyManager
-from .inject import TextInjector
+from .inject import TextInjector, frontmost_app_mac
 from .overlay import Overlay
 from .postprocess import PostProcessor
 from .settings_ui import SettingsDialog
@@ -79,6 +79,9 @@ class FlowController(QObject):
         self._streamer: SpeechKitStreamer | None = None
         self._recording = False
         self._settings_dialog: SettingsDialog | None = None
+        # (pid, имя) приложения, куда вставлять текст — снимок фокуса
+        # в момент нажатия хоткея (до показа overlay)
+        self._target_app: tuple[int, str] | None = None
 
         # --- Сигналы → слоты (исполняются в GUI-потоке) -------------------
         self._sig_recording_started.connect(self._start_recording)
@@ -149,6 +152,11 @@ class FlowController(QObject):
             return
 
         self._recording = True
+        # Запоминаем целевое приложение ДО показа overlay — фокус ещё там
+        self._target_app = frontmost_app_mac()
+        if self._target_app:
+            log.info("Dictation target app: %s (pid=%s)",
+                     self._target_app[1], self._target_app[0])
         self._tray.set_state("recording", "Идёт запись…")
         self._overlay.show_listening()
 
@@ -225,7 +233,8 @@ class FlowController(QObject):
 
     def _inject_text(self, text: str) -> None:
         log.info("Injecting text (%d chars): %r", len(text), text)
-        ok = self._injector.inject(text)
+        target_pid = self._target_app[0] if self._target_app else None
+        ok = self._injector.inject(text, target_pid=target_pid)
         log.info("Injection result: %s (текст также помещён в буфер обмена)", ok)
         if ok:
             self._overlay.flash_done()
