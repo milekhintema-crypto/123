@@ -114,12 +114,26 @@ def _paste_mac_quartz() -> None:
         time.sleep(0.01)
 
 
+def _frontmost_app_mac() -> str:
+    """Имя приложения в фокусе (диагностика: туда уйдёт Cmd+V)."""
+    try:
+        from AppKit import NSWorkspace
+
+        app = NSWorkspace.sharedWorkspace().frontmostApplication()
+        return app.localizedName() if app else "?"
+    except Exception:
+        return "?"
+
+
 def _paste_mac() -> None:
     """macOS: сначала AppleScript, при неудаче — Quartz CGEvent."""
+    log.info("Paste target (frontmost app): %s", _frontmost_app_mac())
     if _paste_mac_applescript():
+        log.info("Paste sent via AppleScript/System Events")
         return
     log.info("Falling back to Quartz CGEvent paste")
     _paste_mac_quartz()
+    log.info("Paste sent via Quartz CGEvent")
 
 
 def _paste_keystroke() -> None:
