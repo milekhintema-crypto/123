@@ -113,30 +113,36 @@ class Overlay(QWidget):
         приложение и фокус (мигающий курсор) остаётся в целевом окне.
         Именно так работают Spotlight-подобные утилиты.
         """
-        if self._mac_panel_patched or sys.platform != "darwin":
+        if sys.platform != "darwin":
             return
-        self._mac_panel_patched = True
         try:
             from ctypes import c_void_p
 
             import objc
-            from AppKit import NSPanel
+            from AppKit import NSColor, NSPanel, NSStatusWindowLevel
 
             NS_NONACTIVATING_PANEL_MASK = 1 << 7  # NSWindowStyleMaskNonactivatingPanel
 
             nsview = objc.objc_object(c_void_p=int(self.winId()))
             nswindow = nsview.window()
-            if nswindow is not None and nswindow.isKindOfClass_(NSPanel):
+            if nswindow is None:
+                return
+
+            if not self._mac_panel_patched and nswindow.isKindOfClass_(NSPanel):
                 nswindow.setStyleMask_(
                     int(nswindow.styleMask()) | NS_NONACTIVATING_PANEL_MASK
                 )
                 nswindow.setBecomesKeyOnlyIfNeeded_(True)
+                self._mac_panel_patched = True
                 log.info("Overlay patched to non-activating NSPanel")
-            else:
-                log.warning(
-                    "Overlay native window is not NSPanel (%s) — cannot patch",
-                    type(nswindow).__name__ if nswindow is not None else None,
-                )
+
+            # Смена styleMask сбрасывает прозрачность, настроенную Qt, —
+            # окно становится невидимым. Восстанавливаем каждый показ.
+            nswindow.setOpaque_(False)
+            nswindow.setBackgroundColor_(NSColor.clearColor())
+            nswindow.setLevel_(NSStatusWindowLevel)
+            # Показ поверх всех окон БЕЗ активации приложения
+            nswindow.orderFrontRegardless()
         except Exception:
             log.exception("Failed to patch overlay into non-activating panel")
 

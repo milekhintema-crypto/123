@@ -37,6 +37,27 @@ def _is_wayland() -> bool:
     )
 
 
+def secure_input_enabled_mac() -> bool:
+    """macOS: включён ли «Безопасный ввод с клавиатуры» (Secure Input).
+
+    Когда какая-либо программа (чаще всего Терминал: меню Терминал →
+    «Безопасный ввод с клавиатуры») включает Secure Input, система
+    молча блокирует ВСЕ синтетические нажатия клавиш — Cmd+V не дойдёт
+    ни одним способом, при этом ошибок нигде не будет.
+    """
+    if sys.platform != "darwin":
+        return False
+    try:
+        import ctypes
+
+        carbon = ctypes.CDLL(
+            "/System/Library/Frameworks/Carbon.framework/Carbon"
+        )
+        return bool(carbon.IsSecureEventInputEnabled())
+    except Exception:
+        return False
+
+
 def macos_accessibility_trusted() -> bool:
     """True, если приложению выдано право «Универсальный доступ» (macOS).
 
@@ -249,6 +270,15 @@ def _paste_mac(target_pid: int | None = None) -> None:
 
     Порядок: refocus-and-wait → AppleScript keystroke → Quartz CGEvent.
     """
+    if secure_input_enabled_mac():
+        # Событие всё равно отправим (вдруг блокировка снята частично),
+        # но громко предупредим — это главный «невидимый» блокер вставки.
+        log.error(
+            "ВКЛЮЧЁН «Безопасный ввод с клавиатуры» (Secure Input) — macOS "
+            "блокирует синтетический Cmd+V. Откройте меню «Терминал» → "
+            "снимите галочку «Безопасный ввод с клавиатуры» (или закройте "
+            "приложение, включившее Secure Input) и повторите."
+        )
     if target_pid is not None:
         ok = _ensure_target_frontmost(target_pid)
         log.info(
